@@ -1,3 +1,4 @@
+
 import ccxt
 import datetime
 import time
@@ -8,21 +9,18 @@ import pprint
 
 # ==== Initial exchange parameters =====
 symbol = str('BTC/USD')
-symbol_list = ['BTC/USD','ETH/USD']
-timeframe = str('1d')
-# exchange = str('okex')
-start_date = str('2018-01-01')
-get_data = True
-reqd_balance = 1000
+symbol_list = ['BTC/USD', 'ETH/USD']  # === Define This ===
 
 # ==== Initial trade parameters =====
-expiry = 'this_month'    # === 'this_week','this_month','this_quarter' ===
-reqd_spread_percent = 0.05       # Custom spread % based on a suitably divergent level
-closeout_spread_percent = 0.005  # Spread % at which position is closed out
-order_qty = 1.0
+expiry = 'this_month'               # === 'this_week','this_month','this_quarter' ===
+reqd_spread_percent = 0.02          # === Custom spread % --> Default = 2%
+closeout_spread_percent = 0.0025    # === Closeout Spread % --> Default = 0.25%
 
-# ==== from variable id ====
-exchange_id1 = 'okex'
+reqd_balance = 100                  # === Dollar Amount deposited in each exchange ===
+# =========== Define these above parameters =================
+
+# =========== Define Exchanges ==============
+exchange_id1 = 'okex'       # === Define First Exchange ===
 exchange_class1 = getattr(ccxt, exchange_id1)
 exchange1 = exchange_class1({
     'apiKey': 'YOUR_API_KEY',
@@ -31,7 +29,7 @@ exchange1 = exchange_class1({
     'enableRateLimit': True,
 })
 
-exchange_id2 = 'deribit'
+exchange_id2 = 'deribit'    # === Define Second Exchange ===
 exchange_class2 = getattr(ccxt, exchange_id2)
 exchange2 = exchange_class2({
     'apiKey': 'YOUR_API_KEY',
@@ -44,8 +42,8 @@ exchange2 = exchange_class2({
 def main():
     while exchange1.fetch_balance() > reqd_balance and exchange2.fetch_balance() > reqd_balance:
         for sym in symbol_list:
-            initiate_arbitrage(sym,expiry=expiry)
-            closeout_arbitrage(sym,expiry=expiry)
+            initiate_arbitrage(sym, expiry=expiry)
+            closeout_arbitrage(sym, expiry=expiry)
             trade_details(sym)
             check_openorders(sym)
             exchange_balances()
@@ -82,8 +80,20 @@ def get_prices(symbol, expiry):
     return bid_exch1, ask_exch1, bid_exch2, ask_exch2
 
 
+# ========= Defining the order quantity at the beginning ================
+# This same order qty has to be used when closing out arbitrage
+
+def orderqty(symbol, expiry):
+    bid_exch1, ask_exch1, bid_exch2, ask_exch2 = get_prices(symbol, expiry)
+    avg_price = (bid_exch1 + ask_exch1 + bid_exch2 + ask_exch2)/4
+
+    order_qty = reqd_balance/avg_price
+    return order_qty
+
+order_qty = orderqty(symbol,expiry)
+
 # ===== Function to initiate arbitrage position based on a defined spread % =====
-def initiate_arbitrage(symbol,expiry):
+def initiate_arbitrage(symbol, expiry):
     # Initialize buy order and sell order price
     buy_order_price = 0.0
     sell_order_price = 0.0
@@ -91,7 +101,8 @@ def initiate_arbitrage(symbol,expiry):
     buy_order = dict()
     sell_order = dict()
 
-    bid_exch1, ask_exch1, bid_exch2, ask_exch2 = get_prices(symbol,expiry)
+    bid_exch1, ask_exch1, bid_exch2, ask_exch2 = get_prices(symbol, expiry)
+
     # Sell Exchange1 Buy Exchange2
     spread1 = bid_exch1 - ask_exch2
     print ("Sell Exchange1 Buy Exchange2 - Spread:", spread1)
@@ -105,6 +116,7 @@ def initiate_arbitrage(symbol,expiry):
     while (len(exchange1.future_position()) == 0 and len(exchange2.future_position())) == 0:
         if (spread1 > 0) and spread1 > reqd_spread_percent * (bid_exch1 + ask_exch1)/2:
             buy_order_price = ask_exch2
+            # === Question is whether we want to create a market order or a Limit order ===
             buy_order = exchange2.create_market_buy_order(symbol,
                                                           order_qty,
                                                           {'trading_agreement': 'agree'})
@@ -128,12 +140,12 @@ def initiate_arbitrage(symbol,expiry):
 
     print('Buy Order Price:', buy_order_price)
     print('Sell Order Price:', sell_order_price)
+    print('Captured Spread:', captured_spread)
 
     return buy_order_price, buy_order, sell_order_price, sell_order, captured_spread
 
 
 # ===== Close arbitrage position once spread percent falls below certain value ======
-
 def closeout_arbitrage(symbol, expiry):
     buy_close_price = 0.0
     sell_close_price = 0.0
@@ -141,16 +153,9 @@ def closeout_arbitrage(symbol, expiry):
     buy_price, buyorder, sell_price, sellorder, current_spread = initiate_arbitrage(symbol, expiry)
 
     bid_exch1, ask_exch1, bid_exch2, ask_exch2 = get_prices(symbol, expiry)
-    # # Sell Exchange1 Buy Exchange2
-    # spread1 = bid_exch1 - ask_exch2
-    # print ("Sell Exchange1 Buy Exchange2 - Spread:", spread1)
-    #
-    # # Sell Exchange2 Buy Exchange1
-    # spread2 = bid_exch2 - ask_exch1
-    # print ("Sell Exchange1 Buy Exchange2 - Spread:", spread2)
 
-    # # ===== Arbitrage condition and calculation =====
-    # # only initiate position if none exists
+    # ===== Arbitrage condition and calculation =====
+    # ===== Only initiate position if none exists ===
     while (len(exchange1.future_position()) > 0 and len(exchange2.future_position())) > 0:
         if current_spread < closeout_spread_percent * (buy_price + sell_price) / 2:
             buy_close_price = ask_exch2
@@ -235,21 +240,32 @@ def check_openorders(symbol):
 def trade_details(symbol):
 
     print("Closed Orders:")
-    pprint.pprint(exchange1.fetch_closed_orders(symbol))
-    pprint.pprint(exchange2.fetch_closed_orders(symbol))
+    print(exchange_id1 + ' Closed Orders:',
+          exchange1.fetch_closed_orders(symbol))
+    print(exchange_id2 + ' Closed Orders:',
+          exchange2.fetch_closed_orders(symbol))
 
     print("Open Orders:")
-    pprint.pprint(exchange1.fetch_open_orders(symbol))
-    pprint.pprint(exchange2.fetch_open_orders(symbol))
+    print(exchange_id1 + ' Open Orders:',
+          exchange1.fetch_open_orders(symbol))
+    print(exchange_id2 + ' Open Orders:',
+          exchange2.fetch_open_orders(symbol))
 
-# ==== Get Balance amounts left on each exchange =====
+    print 'Getting Exchange Positions ...\n'
+    print(exchange_id1 + ' Exchange Positions:',
+          exchange1.private_post_positions(symbol))
+    print(exchange_id2 + ' Exchange Positions:',
+          exchange2.private_post_positions(symbol))
+
+# ========= Get Balance amounts left on each exchange ==========
 def exchange_balances():
-    okex_balance = exchange1.fetch_balance()
-    deri_balance = exchange2.fetch_balance()
-
-    print 'OKEX Balance:\n', okex_balance
-    print 'Deribit Balance:', deri_balance
-    # return okex_balance, deri_balance
+    print exchange_id1 + ' Balance:\n', exchange1.fetch_balance()
+    print exchange_id2 + ' Balance:\n', exchange2.fetch_balance()
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
